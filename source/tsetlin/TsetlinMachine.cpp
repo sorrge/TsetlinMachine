@@ -23,201 +23,212 @@ SOFTWARE.
 */
 
 #include "TsetlinMachine.h"
+#include <iostream>
+#include <algorithm>
 
-void TsetlinMachine::create(int numInputs, int numOutputs, int clausesPerOutput) {
-    _inputStates.resize(numInputs, 0);
+tsetlin_machine::tsetlin_machine(int num_inputs, int num_clauses, int _num_states, double s, mt19937& rng) : num_states(_num_states), one_by_s(1 / s) {
+    num_states = _num_states;
+    uniform_int_distribution<> state_init(0, 1);
 
-    _outputs.resize(numOutputs);
+    clauses.resize(num_clauses);
 
-    for (int oi = 0; oi < numOutputs; oi++) {
-        _outputs[oi]._clauses.resize(clausesPerOutput);
-
-        for (int ci = 0; ci < clausesPerOutput; ci++)
-            _outputs[oi]._clauses[ci]._automataStates.resize(numInputs * 2, 0);
+    for (int ci = 0; ci < num_clauses; ci++) {
+        clauses[ci].automata_states.resize(num_inputs * 2, 0);
+        for (int j = 0; j < num_inputs * 2; ++j) {
+            clauses[ci].automata_states[j] = state_init(rng);
+            clauses[ci].inclusion_update(j);
+        }
     }
-
-    _outputStates.resize(numOutputs, 0);
 }
 
-const std::vector<int> &TsetlinMachine::activate(const std::vector<int> &inputStates) {
-    _inputStates = inputStates;
+int tsetlin_machine::predict(const vector<int> &inputs) {
+    int sum = 0;
 
-    for (int oi = 0; oi < _outputs.size(); oi++) {
-        int sum = 0;
+    for (int j = 0; j < (int)clauses.size(); j++) {
+        int state = 1;
 
-        for (int ci = 0; ci < _outputs[oi]._clauses.size(); ci++) {
-            int state = 1;
-
-            for (std::unordered_set<int>::const_iterator cit = _outputs[oi]._clauses[ci]._inclusions.begin(); cit != _outputs[oi]._clauses[ci]._inclusions.end(); cit++) {
-                int ai = *cit;
-
-                if (ai >= _inputStates.size())
-                    state = state && !_inputStates[ai - _inputStates.size()];
-                else
-                    state = state && _inputStates[ai];
-            }
-
-            _outputs[oi]._clauses[ci]._state = state;
-
-            sum += (ci % 2 == 0 ? state : -state);
+        for (unordered_set<int>::const_iterator cit = clauses[j].inclusions.begin(); cit != clauses[j].inclusions.end(); cit++) {
+            int ai = *cit;
+            int neg = ai % 2;
+            state &= (inputs[ai / 2] ^ neg);
         }
 
-        _outputs[oi]._sum = sum;
-
-        _outputStates[oi] = sum > 0;
+        clauses[j].state = state;
+        sum += (j % 2 == 0 ? state : -state);
     }
 
-    return _outputStates;
+    return sum;
 }
 
-void TsetlinMachine::inclusionUpdate(int oi, int ci, int ai) {
-    int inclusion = _outputs[oi]._clauses[ci]._automataStates[ai] > 0;
+void tsetlin_machine::clause::apply_feedback(int k, int feedback, int num_states) {
+    int& the_state = automata_states[k];
+    int state_change = feedback * (the_state > 0 ? 1 : -1);
+    if (state_change > 0 && the_state < num_states / 2 || state_change < 0 && the_state > -num_states / 2 + 1) {
+        int prev_state = the_state;
+        the_state += state_change;
+        if ((prev_state > 0) != (the_state > 0))
+            inclusion_update(k);
+    }
+}
 
-    std::unordered_set<int>::iterator it = _outputs[oi]._clauses[ci]._inclusions.find(ai);
+void tsetlin_machine::clause::inclusion_update(int k) {
+    int inclusion = automata_states[k] > 0;
+
+    unordered_set<int>::iterator it = inclusions.find(k);
 
     if (inclusion) {
-        if (it == _outputs[oi]._clauses[ci]._inclusions.end())
-            _outputs[oi]._clauses[ci]._inclusions.insert(ai);
+        if (it == inclusions.end())
+            inclusions.insert(k);
     }
     else {
-        if (it != _outputs[oi]._clauses[ci]._inclusions.end())
-            _outputs[oi]._clauses[ci]._inclusions.erase(it);
+        if (it != inclusions.end())
+            inclusions.erase(it);
     }
 }
 
-void TsetlinMachine::modifyI(int oi, int ci, float sInv, float sInvConj, std::mt19937 &rng) {
-    std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
+void tsetlin_machine::clause::modifyI(const vector<int>& inputs, int num_states, bernoulli_distribution& one_by_s, mt19937 &rng) {
+    for (int ai = 0; ai < (int)automata_states.size(); ai++) {
+        int neg_literal = ai % 2;
+        int truth_value_of_target_literal = inputs[ai / 2] ^ neg_literal;
+        int inclusion = automata_states[ai] > 0;
 
-    int clauseState = _outputs[oi]._clauses[ci]._state;
-
-    for (int ai = 0; ai < _outputs[oi]._clauses[ci]._automataStates.size(); ai++) {
-        int input = (ai >= _inputStates.size() ? !_inputStates[ai - _inputStates.size()] : _inputStates[ai]);
-
-        int inclusion = _outputs[oi]._clauses[ci]._automataStates[ai] > 0;
-
-        if (clauseState) {
-            if (input) {
+        if (state) {
+            if (truth_value_of_target_literal) {
                 if (inclusion) {
-                    if (dist01(rng) < sInvConj) {
-                        _outputs[oi]._clauses[ci]._automataStates[ai] += 1;
-
-                        inclusionUpdate(oi, ci, ai);
-                    }
+                    if (!one_by_s(rng))
+                        apply_feedback(ai, 1, num_states);
                 }
                 else {
-                    if (dist01(rng) < sInvConj) {
-                        _outputs[oi]._clauses[ci]._automataStates[ai] += 1;
-
-                        inclusionUpdate(oi, ci, ai);
-                    }
+                    if (!one_by_s(rng))
+                        apply_feedback(ai, -1, num_states);
                 }
             }
             else {
                 if (inclusion) {
                     // NA
+                    cerr << "Something impossible happened" << endl;
                 }
                 else {
-                    if (dist01(rng) < sInv) {
-                        _outputs[oi]._clauses[ci]._automataStates[ai] -= 1;
-
-                        inclusionUpdate(oi, ci, ai);
-                    }
+                    if (one_by_s(rng))
+                        apply_feedback(ai, 1, num_states);
                 }
             }
         }
         else {
-            if (input) {
+            if (truth_value_of_target_literal) {
                 if (inclusion) {
-                    if (dist01(rng) < sInv) {
-                        _outputs[oi]._clauses[ci]._automataStates[ai] -= 1;
-
-                        inclusionUpdate(oi, ci, ai);
-                    }
+                    if (one_by_s(rng))
+                        apply_feedback(ai, -1, num_states);
                 }
                 else {
-                    if (dist01(rng) < sInv) {
-                        _outputs[oi]._clauses[ci]._automataStates[ai] -= 1;
-
-                        inclusionUpdate(oi, ci, ai);
-                    }
+                    if (one_by_s(rng))
+                        apply_feedback(ai, 1, num_states);
                 }
             }
             else {
                 if (inclusion) {
-                    if (dist01(rng) < sInv) {
-                        _outputs[oi]._clauses[ci]._automataStates[ai] -= 1;
-
-                        inclusionUpdate(oi, ci, ai);
-                    }
+                    if (one_by_s(rng))
+                        apply_feedback(ai, -1, num_states);
                 }
                 else {
-                    if (dist01(rng) < sInv) {
-                        _outputs[oi]._clauses[ci]._automataStates[ai] -= 1;
-
-                        inclusionUpdate(oi, ci, ai);
-                    }
+                    if (one_by_s(rng))
+                        apply_feedback(ai, 1, num_states);
                 }
             }
         }
     }
 }
 
-void TsetlinMachine::modifyII(int oi, int ci) {
-    int clauseState = _outputs[oi]._clauses[ci]._state;
+void tsetlin_machine::clause::modifyII(const vector<int>& inputs, int num_states) {
+    for (int ai = 0; ai < automata_states.size(); ai++) {
+        int neg_literal = ai % 2;
+        int input = inputs[ai / 2] ^ neg_literal;
+        int inclusion = automata_states[ai] > 0;
 
-    for (int ai = 0; ai < _outputs[oi]._clauses[ci]._automataStates.size(); ai++) {
-        int input = (ai >= _inputStates.size() ? !_inputStates[ai - _inputStates.size()] : _inputStates[ai]);
-
-        int inclusion = _outputs[oi]._clauses[ci]._automataStates[ai] > 0;
-
-        if (clauseState) {
+        if (state) {
             if (!input) {
-                if (!inclusion) {
-                    _outputs[oi]._clauses[ci]._automataStates[ai] += 1;
-
-                    inclusionUpdate(oi, ci, ai);
-                }
+                if (!inclusion)
+                    apply_feedback(ai, -1, num_states);
             }
         }
     }
 }
 
-void TsetlinMachine::learn(const std::vector<int> &targetOutputStates, float s, int T, std::mt19937 &rng) {
-    std::uniform_real_distribution<float> dist01(0.0f, 1.0f);
+void tsetlin_machine::learn(const vector<int>& inputs, int target, int T, mt19937 &rng) {
+    int sum = predict(inputs);
+    int clamped_sum = min(T, max(-T, sum));
+    double rescale = 1.0 / (2 * T);
 
-    float sInv = 1.0f / s;
-    float sInvConj = 1.0f - sInv;
+    double probFeedBack0 = (T - clamped_sum) * rescale;
+    double probFeedBack1 = (T + clamped_sum) * rescale;
 
-    for (int oi = 0; oi < _outputs.size(); oi++) {
-        int clampedSum = std::min(T, std::max(-T, _outputs[oi]._sum));
-        float rescale = 1.0f / static_cast<float>(2 * T);
-
-        float probFeedBack0 = (T - clampedSum) * rescale;
-        float probFeedBack1 = (T + clampedSum) * rescale;
-    
-        int sum = 0;
-
-        for (int ci = 0; ci < _outputs[oi]._clauses.size(); ci++) {
-            if (ci % 2 == 0) {
-                if (targetOutputStates[oi]) {
-                    if (dist01(rng) < probFeedBack0)
-                        modifyI(oi, ci, sInv, sInvConj, rng);
-                }
-                else {
-                    if (dist01(rng) < probFeedBack1)
-                        modifyII(oi, ci);
-                }
-            }
-            else {
-                if (targetOutputStates[oi]) {
-                    if (dist01(rng) < probFeedBack0)
-                        modifyII(oi, ci);
-                }
-                else {
-                    if (dist01(rng) < probFeedBack1)
-                        modifyI(oi, ci, sInv, sInvConj, rng);
-                }
-            }
+    for (int j = 0; j < (int)clauses.size(); j += 2) {                              // 1.7
+        if (target) {                                                               // 1.8
+            if (dist01(rng) <= probFeedBack0)                                       // 1.9
+                clauses[j].modifyI(inputs, num_states, one_by_s, rng);// 1.10
         }
+        else {                                                                      // 1.12
+            if (dist01(rng) <= probFeedBack1)                                       // 1.13
+                clauses[j].modifyII(inputs, num_states);                            // 1.14
+        }                                                                           // 1.16
+    }                                                                               // 1.17
+
+    for (int j = 1; j < (int)clauses.size(); j += 2) {
+        if (target) {
+            if (dist01(rng) <= probFeedBack0)
+                clauses[j].modifyII(inputs, num_states);
+        }
+        else {
+            if (dist01(rng) <= probFeedBack1)
+                clauses[j].modifyI(inputs, num_states, one_by_s, rng);
+        }
+    }
+}
+
+
+multiclass_tsetlin_machine::multiclass_tsetlin_machine(int num_inputs, int num_classes, int num_clauses, int num_states, double s, mt19937 &rng) : other_class(1, num_classes - 1) {
+    int clauses_per_class = num_clauses / num_classes;
+    for(int i = 0; i < num_classes; ++i)
+        class_clauses.push_back(make_unique<tsetlin_machine>(num_inputs, clauses_per_class, num_states, s, rng));
+
+    class_votes.resize(num_classes);
+}
+
+
+void multiclass_tsetlin_machine::predict_by_class(const vector<int> &inputs, vector<int>& class_votes) {
+    for(int c = 0; c < (int)class_clauses.size(); ++c)
+        class_votes[c] = class_clauses[c]->predict(inputs);
+}
+
+
+int multiclass_tsetlin_machine::predict(const vector<int> &inputs) {
+    predict_by_class(inputs, class_votes);
+    return (int)distance(class_votes.begin(), max_element(class_votes.begin(), class_votes.end()));
+}
+
+
+void multiclass_tsetlin_machine::learn(const vector<int> &inputs, int target_class, int T, mt19937 &rng) {
+    predict_by_class(inputs, class_votes);
+    int negative_target_class = (target_class + other_class(rng)) % class_clauses.size();
+    double rescale = 1.0 / (2 * T);
+
+    for (int j = 0; j < (int)class_clauses[target_class]->clauses.size(); ++j) {
+        int clamped_sum = min(T, max(-T, class_votes[target_class]));
+        double probFeedBack0 = (T - clamped_sum) * rescale;
+        if (class_clauses[target_class]->dist01(rng) <= probFeedBack0)
+            if (j % 2 == 0)
+                class_clauses[target_class]->clauses[j].modifyI(inputs, class_clauses[target_class]->num_states, class_clauses[target_class]->one_by_s, rng);
+            else
+                class_clauses[target_class]->clauses[j].modifyII(inputs, class_clauses[target_class]->num_states);
+    }
+
+    for (int j = 0; j < (int)class_clauses[negative_target_class]->clauses.size(); ++j) {
+        int clamped_sum = min(T, max(-T, class_votes[negative_target_class]));
+        double probFeedBack1 = (T + clamped_sum) * rescale;
+        if (class_clauses[negative_target_class]->dist01(rng) <= probFeedBack1)
+            if (j % 2 == 0)
+                class_clauses[negative_target_class]->clauses[j].modifyII(inputs, class_clauses[negative_target_class]->num_states);
+             else
+                class_clauses[negative_target_class]->clauses[j].modifyI(inputs, class_clauses[negative_target_class]->num_states, class_clauses[negative_target_class]->one_by_s, rng);
     }
 }

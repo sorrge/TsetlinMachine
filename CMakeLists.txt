@@ -4,7 +4,7 @@ project(Demo)
 
 # Compiler-specific flags and definitions
 if(CMAKE_COMPILER_IS_GNUCXX)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1y")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1y -fopenmp")
 endif()
 
 include_directories("${PROJECT_SOURCE_DIR}/source")
@@ -17,6 +17,8 @@ set(SOURCES
     "${SOURCE_PATH}/tsetlin/TsetlinMachine.h"
     "${SOURCE_PATH}/tsetlin/TsetlinMachine.cpp"
     "${SOURCE_PATH}/Main.cpp"
+    "${SOURCE_PATH}/simple_demos.h"
+    "${SOURCE_PATH}/noisy_xor_task.h"
 )
 
 add_executable(Demo ${SOURCES})

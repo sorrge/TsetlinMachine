@@ -27,38 +27,45 @@ SOFTWARE.
 #include <vector>
 #include <random>
 #include <unordered_set>
-#include <assert.h>
+#include <memory>
 
-class TsetlinMachine {
+using namespace std;
+
+class tsetlin_machine {
 public:
-    struct Clause {
-        std::vector<int> _automataStates;
-        std::unordered_set<int> _inclusions;
+    struct clause {
+        vector<int> automata_states;
+        unordered_set<int> inclusions;
+        int state;
 
-        int _state;
+        void inclusion_update(int k);
+        void apply_feedback(int k, int feedback, int num_states);
+        void modifyI(const vector<int>& inputs, int num_states, bernoulli_distribution& one_by_s, mt19937 &rng);
+        void modifyII(const vector<int>& inputs, int num_states);
     };
 
-    struct Output {
-        std::vector<Clause> _clauses;
+    vector<clause> clauses;
+    int num_states;
 
-        int _sum;
-    };
+    uniform_real_distribution<double> dist01;
+    bernoulli_distribution one_by_s;
 
-private:
-    std::vector<int> _inputStates;
-    
-    std::vector<Output> _outputs;
+    tsetlin_machine(int num_inputs, int num_clauses, int num_states, double s, mt19937& rng);
 
-    std::vector<int> _outputStates;
+    int predict(const vector<int> &inputs);
+    void learn(const vector<int> &inputs, int target, int T, mt19937 &rng);
+};
 
-    void inclusionUpdate(int oi, int ci, int ai);
-    void modifyI(int oi, int ci, float sInv, float sInvConj, std::mt19937 &rng);
-    void modifyII(int oi, int ci);
+
+class multiclass_tsetlin_machine {
+    vector<unique_ptr<tsetlin_machine>> class_clauses;
+    vector<int> class_votes;
+    uniform_int_distribution<> other_class;
 
 public:
-    void create(int numInputs, int numOutputs, int clausesPerOutput);
+    multiclass_tsetlin_machine(int num_inputs, int num_classes, int num_clauses, int num_states, double s, mt19937& rng);
 
-    const std::vector<int> &activate(const std::vector<int> &inputStates);
-
-    void learn(const std::vector<int> &targetOutputStates, float s, int T, std::mt19937 &rng);
+    int predict(const vector<int> &inputs);
+    void predict_by_class(const vector<int> &inputs, vector<int>& class_votes);
+    void learn(const vector<int> &inputs, int target_class, int T, mt19937 &rng);
 };
